@@ -8,6 +8,13 @@ jobs:
   test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
+
+    env:
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      UI_BASE_URL: ${{ secrets.UI_BASE_URL }}
+      EH_USERNAME: ${{ secrets.EH_USERNAME }}
+      EH_PASSWORD: ${{ secrets.EH_PASSWORD }}
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5

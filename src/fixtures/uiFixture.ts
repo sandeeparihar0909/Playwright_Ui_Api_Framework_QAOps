@@ -2,7 +2,7 @@ import {test as base, type Page} from '@playwright/test';
 import {LoginPage} from '../pages/LoginPage.js';
 import { EventsPage } from '../pages/EventsPage.js';
 import { DashboardPage } from '../pages/DashboardPage.js';
-import path from 'path/win32';
+import path from 'node:path';
 
 
 const authFile = path.join(

@@ -69,7 +69,7 @@ jobs:
     # Maximum time allowed for this job.
     # If tests keep running beyond 60 minutes,
     # GitHub will terminate the job.
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     # GitHub creates a fresh Ubuntu virtual machine.
     runs-on: ubuntu-latest
@@ -173,7 +173,7 @@ jobs:
       # means Playwright will execute only tests tagged @smoke.
       # ======================================================
       - name: Run Smoke Tests - Pull Request
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
 
         env:
           # Azure Playwright Workspace URL.

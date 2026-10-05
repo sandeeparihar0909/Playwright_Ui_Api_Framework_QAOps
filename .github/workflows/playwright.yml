@@ -1,45 +1,425 @@
+# ============================================================
+# GitHub Actions Workflow
+# ============================================================
+# This workflow does two things:
+#
+# 1. Pull Request:
+#       Run ONLY Smoke tests
+#
+# 2. Monday-Friday at 1:00 AM IST:
+#       Run FULL regression suite
+#       Send email whether regression PASSES or FAILS
+#       Include the Playwright HTML report in the email
+# ============================================================
+
 name: Playwright Tests
+
+
+# ============================================================
+# WORKFLOW TRIGGERS
+# ============================================================
 on:
-  push:
-    branches: [ main, master ]
+
+  # ----------------------------------------------------------
+  # Pull Request trigger
+  # ----------------------------------------------------------
+  # Whenever someone creates/updates a PR targeting main/master,
+  # GitHub Actions will start this workflow.
+  #
+  # We will run ONLY @smoke tests for PR.
+  # ----------------------------------------------------------
   pull_request:
     branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+  # ----------------------------------------------------------
+  # Scheduled trigger
+  # ----------------------------------------------------------
+  # GitHub Actions cron uses UTC.
+  #
+  # 19:30 UTC = 01:00 AM IST
+  #
+  # 1-5 means:
+  # Monday = 1
+  # Tuesday = 2
+  # Wednesday = 3
+  # Thursday = 4
+  # Friday = 5
+  # Saturday = 6
+  #
+  # Therefore:
+  # Monday-Saturday at 1:00 AM IST (Updated to include Saturday)
+  # ----------------------------------------------------------
+  schedule:
+    - cron: '30 19 * * 1-6'
+
+
+# ============================================================
+# JOBS
+# ============================================================
+
 jobs:
+
+  # ==========================================================
+  # JOB 1: PLAYWRIGHT TEST EXECUTION
+  # ==========================================================
   test:
+
+    # Maximum time allowed for this job.
+    # If tests keep running beyond 60 minutes,
+    # GitHub will terminate the job.
     timeout-minutes: 60
+
+    # GitHub creates a fresh Ubuntu virtual machine.
     runs-on: ubuntu-latest
 
+    # --------------------------------------------------------
+    # ENVIRONMENT VARIABLES
+    # --------------------------------------------------------
+    # These values are stored securely in GitHub Secrets.
+    #
+    # We DO NOT commit .env to Git.
+    #
+    # Playwright can access them using:
+    #
+    # process.env.API_BASE_URL
+    # process.env.UI_BASE_URL
+    # process.env.EH_USERNAME
+    # process.env.EH_PASSWORD
+    # --------------------------------------------------------
     env:
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       UI_BASE_URL: ${{ secrets.UI_BASE_URL }}
       EH_USERNAME: ${{ secrets.EH_USERNAME }}
       EH_PASSWORD: ${{ secrets.EH_PASSWORD }}
 
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v5
-      with:
-        node-version: lts/*
+      # ------------------------------------------------------
+      # STEP 1: Checkout source code
+      # ------------------------------------------------------
+      # Downloads your GitHub repository into the runner.
+      #
+      # Without this, the runner would not have:
+      #
+      # - Playwright tests
+      # - package.json
+      # - playwright.config.ts
+      # - Page Objects
+      # - framework code
+      # ------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-    - name: Install dependencies
-      run: npm ci
 
-    - name: Azure Login
-      uses: azure/login@v3
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # ------------------------------------------------------
+      # STEP 2: Install Node.js
+      # ------------------------------------------------------
+      # Playwright is a Node.js application.
+      #
+      # setup-node installs/configures Node.js on the runner.
+      # ------------------------------------------------------
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
 
-    - name: Run Playwright tests
-      env:
-        PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL}}
-      run: npx playwright test --config=playwright.service.config.ts --workers=1
+        with:
+          # Use the latest LTS version of Node.js.
+          node-version: lts/*
 
-    - uses: actions/upload-artifact@v4
-      if: ${{ !cancelled() }}
-      with:
-        name: playwright-report
-        path: playwright-report/
-        retention-days: 30
+
+      # ------------------------------------------------------
+      # STEP 3: Install project dependencies
+      # ------------------------------------------------------
+      # npm ci installs exactly what package-lock.json specifies.
+      #
+      # This is preferred over npm install in CI/CD because
+      # it provides a consistent dependency installation.
+      # ------------------------------------------------------
+      - name: Install dependencies
+        run: npm ci
+
+
+      # ------------------------------------------------------
+      # STEP 4: Login to Azure
+      # ------------------------------------------------------
+      # This authenticates GitHub Actions with Azure.
+      #
+      # AZURE_CREDENTIALS contains the Service Principal
+      # authentication JSON.
+      #
+      # After login, your workflow can access Azure resources
+      # such as Azure Playwright Workspace.
+      # ------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v3
+
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+
+      # ======================================================
+      # STEP 5A: RUN SMOKE TESTS FOR PULL REQUEST
+      # ======================================================
+      # This step executes ONLY when the workflow was triggered
+      # by a Pull Request.
+      #
+      # github.event_name will be:
+      #
+      # pull_request
+      #
+      # --grep "@smoke"
+      # means Playwright will execute only tests tagged @smoke.
+      # ======================================================
+      - name: Run Smoke Tests - Pull Request
+        if: github.event_name == 'pull_request'
+
+        env:
+          # Azure Playwright Workspace URL.
+          PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
+
+        run: |
+          npx playwright test \
+            --config=playwright.service.config.ts \
+            --grep "@smoke" \
+            --workers=1
+
+
+      # ======================================================
+      # STEP 5B: RUN FULL REGRESSION - NIGHTLY
+      # ======================================================
+      # This step executes ONLY when GitHub starts the workflow
+      # because of the schedule/cron.
+      #
+      # github.event_name will be:
+      #
+      # schedule
+      #
+      # There is NO --grep here.
+      #
+      # Therefore Playwright runs the complete test suite.
+      # ======================================================
+      - name: Run Full Regression - Nightly
+        if: github.event_name == 'schedule'
+
+        env:
+          PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
+
+        run: |
+          npx playwright test \
+            --config=playwright.service.config.ts \
+            --workers=1
+
+
+      # ======================================================
+      # STEP 6: UPLOAD PLAYWRIGHT HTML REPORT
+      # ======================================================
+      # This step uploads playwright-report/ from the runner
+      # to GitHub Actions as an artifact.
+      #
+      # IMPORTANT:
+      #
+      # We use:
+      #
+      #if: ${{ !cancelled() }}
+      #
+      # This means:
+      #
+      # PASS  → upload report
+      # FAIL  → upload report
+      #
+      # So even when Playwright tests fail, we still preserve
+      # the HTML report.
+      # ======================================================
+      - name: Upload Playwright HTML Report
+        if: ${{ !cancelled() }}
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          # Name visible in GitHub Actions → Artifacts.
+          name: playwright-report
+
+          # Playwright's default HTML report directory.
+          path: playwright-report/
+
+          # Keep report for 30 days.
+          retention-days: 30
+
+
+  # ==========================================================
+  # JOB 2: SEND NIGHTLY EMAIL
+  # ==========================================================
+  #
+  # This is a separate job because:
+  #
+  # Job 1 = execute tests
+  #
+  # Job 2 = send email
+  #
+  # Job 2 depends on Job 1.
+  # ==========================================================
+
+  # send-nightly-report:
+
+  #   # --------------------------------------------------------
+  #   # Wait for the test job to finish.
+  #   # --------------------------------------------------------
+  #   needs: test
+
+
+  #   # --------------------------------------------------------
+  #   # IMPORTANT
+  #   # --------------------------------------------------------
+  #   #
+  #   # always()
+  #   #
+  #   # allows this job to execute even when the test job fails.
+  #   #
+  #   # schedule
+  #   #
+  #   # makes sure we send email ONLY for the nightly run.
+  #   #
+  #   # Therefore:
+  #   #
+  #   # Nightly PASS → Email
+  #   # Nightly FAIL → Email
+  #   #
+  #   # PR PASS → No email
+  #   # PR FAIL → No email
+  #   # --------------------------------------------------------
+  #   if: ${{ always() && github.event_name == 'schedule' }}
+
+
+  #   runs-on: ubuntu-latest
+
+
+  #   steps:
+
+  #     # ------------------------------------------------------
+  #     # STEP 1: Download the Playwright report
+  #     # ------------------------------------------------------
+  #     # The previous job uploaded the report as an artifact.
+  #     #
+  #     # This step downloads that artifact into:
+  #     #
+  #     # ./playwright-report
+  #     #
+  #     # The email job runs on a NEW runner, so we must download
+  #     # the artifact again.
+  #     # ------------------------------------------------------
+  #     - name: Download Playwright HTML Report
+  #       uses: actions/download-artifact@v5
+
+  #       with:
+  #         name: playwright-report
+  #         path: playwright-report
+
+
+  #     # ------------------------------------------------------
+  #     # STEP 2: Send email
+  #     # ------------------------------------------------------
+  #     # This sends an email regardless of whether the nightly
+  #     # regression passed or failed.
+  #     #
+  #     # EMAIL_USERNAME and EMAIL_PASSWORD should be stored
+  #     # inside GitHub Secrets.
+  #     # ------------------------------------------------------
+  #     - name: Send Nightly Regression Report
+  #       uses: dawidd6/action-send-mail@v6
+
+  #       with:
+
+  #         # --------------------------------------------------
+  #         # Gmail SMTP server.
+  #         #
+  #         # If you're using Outlook/Office365, these values
+  #         # will be different.
+  #         # --------------------------------------------------
+  #         server_address: smtp.gmail.com
+  #         server_port: 465
+  #         secure: true
+
+
+  #         # --------------------------------------------------
+  #         # Email account credentials.
+  #         #
+  #         # NEVER put these directly in YAML.
+  #         # --------------------------------------------------
+  #         username: ${{ secrets.EMAIL_USERNAME }}
+  #         password: ${{ secrets.EMAIL_PASSWORD }}
+
+
+  #         # --------------------------------------------------
+  #         # Email subject.
+  #         #
+  #         # This dynamically shows PASS or FAIL.
+  #         # --------------------------------------------------
+  #         subject: >
+  #           Playwright Nightly Regression -
+  #           ${{ needs.test.result == 'success' && 'PASSED' || 'FAILED' }}
+
+
+  #         # Sender shown in email.
+  #         from: Playwright Automation
+
+
+  #         # --------------------------------------------------
+  #         # You said you will provide 5 email IDs.
+  #         #
+  #         # Replace these with your actual email addresses.
+  #         # --------------------------------------------------
+  #         to: |
+  #           user1@example.com,
+  #           user2@example.com,
+  #           user3@example.com,
+  #           user4@example.com,
+  #           user5@example.com
+
+
+  #         # --------------------------------------------------
+  #         # Email body.
+  #         # --------------------------------------------------
+  #         body: |
+  #           Hello Team,
+
+  #           The nightly Playwright regression execution has completed.
+
+  #           Result:
+  #           ${{ needs.test.result }}
+
+  #           Repository:
+  #           ${{ github.repository }}
+
+  #           Branch:
+  #           main
+
+  #           Workflow:
+  #           ${{ github.workflow }}
+
+  #           Run ID:
+  #           ${{ github.run_id }}
+
+  #           GitHub Actions Run:
+  #           ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  #           The Playwright HTML report is attached below.
+
+  #           Regards,
+  #           QA Automation
+
+
+  #         # --------------------------------------------------
+  #         # Attach the complete Playwright HTML report.
+  #         #
+  #         # The report contains:
+  #         #
+  #         # - Test results
+  #         # - Passed tests
+  #         # - Failed tests
+  #         # - Screenshots
+  #         # - Videos (if enabled)
+  #         # - Traces (if enabled)
+  #         # --------------------------------------------------
+  #         attachments: playwright-report

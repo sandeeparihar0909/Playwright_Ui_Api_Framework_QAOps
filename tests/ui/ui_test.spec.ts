@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 import {test} from '../../src/fixtures/uiFixture.js';
 
-test('Search event → Select event → Select tickets → Book → Verify booking confirmation.', async ({ dashboard, eventsPage }) => {
+test('Search event → Select event → Select tickets → Book → Verify booking confirmation.',{tag: ['@smoke']}, async ({ dashboard, eventsPage }) => {
   await dashboard.navigateToDashboard();
 
   await dashboard.navigateToEvents();
